@@ -1,1 +1,5 @@
+# git ignore these please
+.vscode
+__pycache__
 config.py
+*.db
