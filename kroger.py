@@ -1,28 +1,51 @@
+import sys
 import config
-import requests
-import schedule
-import time
-from datetime import datetime
 import sqlite3
+import requests
+from base64 import b64encode
+from datetime import datetime
 
-DATABASE = 'kroger_prices.db'
+
+DATABASE = 'prices.db'
+
+client_id = config.CLIENT_ID
+client_secret = config.CLIENT_SECRET
+
+zip_code = 38138
+
+auth = b64encode(f"{client_id}:{client_secret}".encode()).decode()
+
 
 def get_token():
-    """Authenticate with Kroger API and get access token."""
-    response = requests.post(config.TOKEN_URL, data={
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': f'Basic {auth}'
+    }
+    
+    response = requests.post('https://api.kroger.com/v1/connect/oauth2/token', headers=headers, data={
         'grant_type': 'client_credentials',
         'scope': 'product.compact'
-    }, auth=(config.CLIENT_ID, config.CLIENT_SECRET))
+    })
 
     response.raise_for_status()
     return response.json()['access_token']
 
-def get_prices(token, zip=config.ZIP_CODE):
-    """Fetch egg prices from Kroger API."""
+def get_stores(token, zip_code):
+    headers = {'Authorization': f'Bearer {token}'}
+    params = {
+        'filter.zipCode.near': zip_code,
+        'filter.limit': 50 
+    }
+    
+    response = requests.get('https://api.kroger.com/v1/locations', headers=headers, params=params)
+    response.raise_for_status()
+    return response.json()['data']
+
+def get_prices(token, location_id):
     headers = {'Authorization': f'Bearer {token}'}
     params = {
         'filter.term': 'eggs',
-        'filter.locationId': zip,
+        'filter.locationId': location_id,
         'filter.limit': 10
     }
     
@@ -30,46 +53,53 @@ def get_prices(token, zip=config.ZIP_CODE):
     response.raise_for_status()
     return response.json()['data']
 
-def db_save(data):
-    """Save product data to SQLite database."""
+def db_save(products, store_info):
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
 
-    # Create table if not exists
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS prices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT,
+        store_id INTEGER,
+        store_name TEXT,
+        store_address TEXT,
+        store_city TEXT,
+        store_state TEXT,
+        store_zip TEXT,
+        product_id INTEGER,
         product_name TEXT,
-        price REAL,
-        currency TEXT,
-        date TEXT
+        price REAL
     )
     ''')
 
-    # Insert data
-    for item in data:
+    for item in products:
+        product_id = item['productId']
         product_name = item['description']
         price = item['items'][0]['price']['regular']
-        currency = item['items'][0]['price']['currency']
         date = datetime.now().strftime('%Y-%m-%d')
 
-        cursor.execute('INSERT INTO prices (product_name, price, currency, date) VALUES (?, ?, ?, ?)', 
-                       (product_name, price, currency, date))
+        cursor.execute('INSERT INTO prices (date, store_id, store_name, store_address, store_city, store_state, store_zip, product_id, product_name, price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+                       (date, store_info['id'], store_info['name'], store_info['address'], store_info['city'], store_info['state'], store_info['zip'], product_id, product_name, price))
 
     conn.commit()
     conn.close()
 
-def daily_check():
-    """Perform daily check for egg prices."""
+def price_check():
     token = get_token()
-    egg_price = get_prices(token)
-    db_save(egg_price)
-
-# Schedule the script to run daily at the specified time
-# schedule.every().day.at(config.CHECK_TIME).do(daily_check)
+    stores = get_stores(token, zip_code)
+    for store in stores:
+        store_info = {
+            'id': store['locationId'],
+            'name': store['name'],
+            'address': store['address']['addressLine1'],
+            'city': store['address']['city'],
+            'state': store['address']['state'],
+            'zip': store['address']['zipCode']
+        }
+        eggs = get_prices(token, store_info['id'])
+        db_save(eggs, store_info)
 
 if __name__ == '__main__':
-    while True:
-        daily_check()
-        # schedule.run_pending()
-        # time.sleep(60)
+    price_check()
+    sys.exit(0)
