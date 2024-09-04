@@ -13,6 +13,8 @@ client_secret = config.CLIENT_SECRET
 
 zip_code = 38138
 
+search_term = 'eggs'
+
 auth = b64encode(f"{client_id}:{client_secret}".encode()).decode()
 
 
@@ -44,7 +46,7 @@ def get_stores(token, zip_code):
 def get_prices(token, location_id):
     headers = {'Authorization': f'Bearer {token}'}
     params = {
-        'filter.term': 'eggs',
+        'filter.term': search_term,
         'filter.locationId': location_id,
         'filter.limit': 10
     }
